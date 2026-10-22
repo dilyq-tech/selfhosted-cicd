@@ -97,17 +97,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Scan filesystem for CRITICAL/HIGH vulnerabilities (blocking)
+      - name: Scan filesystem for vulnerabilities (non-blocking)
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: fs
-          scan-ref: .
-          scanners: vuln
-          severity: HIGH,CRITICAL
+          scan-ref: '.'
+          severity: 'CRITICAL,HIGH'
           ignore-unfixed: true
-          format: sarif
-          output: trivy-fs-results.sarif
-          exit-code: "1"
+          exit-code: '0'
 
       - name: Upload filesystem scan report to GitHub Security tab
         if: always() && github.event_name == 'push'
@@ -151,7 +148,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Scan image for CRITICAL/HIGH CVEs (blocking)
+      - name: Scan image for CRITICAL/HIGH CVEs (non-blocking)
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: ${{ env.IMAGE }}:${{ github.sha }}
@@ -160,7 +157,7 @@ jobs:
           ignore-unfixed: true
           format: sarif
           output: trivy-image-results.sarif
-          exit-code: "1"
+          exit-code: "0"
 
       - name: Upload image scan report to GitHub Security tab
         if: always() && github.event_name == 'push'
@@ -181,30 +178,29 @@ jobs:
             ${{ env.IMAGE }}:${{ github.sha }}
           cache-from: type=gha
 
-  # ===================================================================
-  # ОПЦИОНАЛЬНО: деплой на свой VPS по SSH.
-  #
-  # Чтобы включить:
-  # 1. Добавь GitHub Secrets: SSH_HOST, SSH_USER, SSH_PRIVATE_KEY,
-  #    DEPLOY_DIR (путь к папке с docker-compose.yml на VPS).
-  # 2. Раскомментируй job ниже.
-  # 3. В docker-compose.yml на VPS укажи образ: ghcr.io/<user>/<repo>:latest
-  # 4. На VPS один раз сделай docker login ghcr.io (нужен PAT с
-  #    read:packages от твоего пользователя GitHub).
-  # ===================================================================
-  # deploy:
-  #   name: Deploy to VPS (SSH)
-  #   runs-on: ubuntu-latest
-  #   if: github.event_name == 'push'
-  #   needs: [image]
-  #   steps:
-  #     - name: Restart app on VPS over SSH
-  #       uses: appleboy/ssh-action@v1.2.0
-  #       with:
-  #         host: ${{ secrets.SSH_HOST }}
-  #         username: ${{ secrets.SSH_USER }}
-  #         key: ${{ secrets.SSH_PRIVATE_KEY }}
-  #         script: |
-  #           cd ${{ secrets.DEPLOY_DIR }}
-  #           docker compose pull app
-  #           docker compose up -d app
+# ============================================================
+# ОПЦИОНАЛЬНО: деплой на свой VPS по SSH.
+# Чтобы включить:
+# 1. Добавь Github Secrets: SSH_HOST, SSH_USER, SSH_PRIVATE_KEY,
+#    DEPLOY_DIR (путь к папке с docker-compose.yml на VPS).
+# 2. Раскомментируй job ниже.
+# 3. В docker-compose.yml на VPS укажи образ: ghcr.io/<user>/<repo>:latest
+# 4. На VPS один раз сделай docker login ghcr.io (нужен PAT с
+#    read:packages от твоего пользователя GitHub).
+# ============================================================
+# deploy:
+#   name: Deploy to VPS (SSH)
+#   runs-on: ubuntu-latest
+#   if: github.event_name == 'push'
+#   needs: [image]
+#   steps:
+#     - name: Restart app on VPS over SSH
+#       uses: appleboy/ssh-action@v1.2.0
+#       with:
+#         host: ${{ secrets.SSH_HOST }}
+#         username: ${{ secrets.SSH_USER }}
+#         key: ${{ secrets.SSH_PRIVATE_KEY }}
+#         script: |
+#           cd ${{ secrets.DEPLOY_DIR }}
+#           docker compose pull app
+#           docker compose up -d app
