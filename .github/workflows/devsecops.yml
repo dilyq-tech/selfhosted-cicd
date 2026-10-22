@@ -104,11 +104,13 @@ jobs:
           scan-ref: '.'
           severity: 'CRITICAL,HIGH'
           ignore-unfixed: true
+          format: sarif
+          output: trivy-fs-results.sarif
           exit-code: '0'
 
       - name: Upload filesystem scan report to GitHub Security tab
         if: always() && github.event_name == 'push'
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy-fs-results.sarif
           category: fs-scan
@@ -161,7 +163,7 @@ jobs:
 
       - name: Upload image scan report to GitHub Security tab
         if: always() && github.event_name == 'push'
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy-image-results.sarif
           category: image-scan
@@ -177,30 +179,3 @@ jobs:
             ${{ env.IMAGE }}:latest
             ${{ env.IMAGE }}:${{ github.sha }}
           cache-from: type=gha
-
-# ============================================================
-# ОПЦИОНАЛЬНО: деплой на свой VPS по SSH.
-# Чтобы включить:
-# 1. Добавь Github Secrets: SSH_HOST, SSH_USER, SSH_PRIVATE_KEY,
-#    DEPLOY_DIR (путь к папке с docker-compose.yml на VPS).
-# 2. Раскомментируй job ниже.
-# 3. В docker-compose.yml на VPS укажи образ: ghcr.io/<user>/<repo>:latest
-# 4. На VPS один раз сделай docker login ghcr.io (нужен PAT с
-#    read:packages от твоего пользователя GitHub).
-# ============================================================
-# deploy:
-#   name: Deploy to VPS (SSH)
-#   runs-on: ubuntu-latest
-#   if: github.event_name == 'push'
-#   needs: [image]
-#   steps:
-#     - name: Restart app on VPS over SSH
-#       uses: appleboy/ssh-action@v1.2.0
-#       with:
-#         host: ${{ secrets.SSH_HOST }}
-#         username: ${{ secrets.SSH_USER }}
-#         key: ${{ secrets.SSH_PRIVATE_KEY }}
-#         script: |
-#           cd ${{ secrets.DEPLOY_DIR }}
-#           docker compose pull app
-#           docker compose up -d app
