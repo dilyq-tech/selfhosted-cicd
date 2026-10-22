@@ -1,0 +1,11 @@
+.env
+registry/auth/htpasswd
+app/app.tar
+__pycache__/
+*.pyc
+.venv/
+venv/
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+*.sarif

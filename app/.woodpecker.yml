@@ -1,0 +1,52 @@
+when:
+  branch: main
+
+workspace:
+  base: /workdir
+  path: src
+
+steps:
+  test:
+    image: python:3.12-slim
+    commands:
+      - pip install --no-cache-dir -r requirements.txt
+      - pytest -v
+
+  build:
+    image: docker:29-cli
+    depends_on: [test]
+    commands:
+      - export IMAGE=localhost:5000/cicd-lab/demo-app
+      - docker build -t "$IMAGE:$CI_COMMIT_SHA" -t "$IMAGE:latest" .
+      - docker save -o app.tar "$IMAGE:latest"
+
+  scan:
+    image: aquasec/trivy:0.55.0
+    depends_on: [build]
+    commands:
+      - trivy image --input app.tar --severity CRITICAL --ignore-unfixed --exit-code 1 --no-progress
+      - trivy image --input app.tar --severity HIGH,CRITICAL --ignore-unfixed --no-progress || true
+
+  push:
+    image: docker:29-cli
+    depends_on: [scan]
+    environment:
+      REGISTRY_USER:
+        from_secret: registry_user
+      REGISTRY_PASSWORD:
+        from_secret: registry_password
+    commands:
+      - export IMAGE=localhost:5000/cicd-lab/demo-app
+      - echo "$REGISTRY_PASSWORD" | docker login localhost:5000 -u "$REGISTRY_USER" --password-stdin
+      - docker push "$IMAGE:$CI_COMMIT_SHA"
+      - docker push "$IMAGE:latest"
+      - docker logout localhost:5000
+
+  deploy:
+    image: docker:29-cli
+    depends_on: [push]
+    commands:
+      - docker rm -f cicd-demo-app 2>/dev/null || true
+      - docker run -d --name cicd-demo-app -p 8090:8001 localhost:5000/cicd-lab/demo-app:latest
+      - sleep 3
+      - wget -qO- http://127.0.0.1:8090/

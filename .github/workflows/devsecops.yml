@@ -1,0 +1,210 @@
+name: DevSecOps Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  packages: write
+  security-events: write
+
+concurrency:
+  group: devsecops-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  secret-scan:
+    name: Secret Detection (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository (full history for gitleaks)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect hardcoded secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  quality:
+    name: Code Quality (ruff + mypy)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: app/requirements*.txt
+
+      - name: Install runtime and dev dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Lint code (ruff)
+        run: ruff check .
+
+      - name: Static type check (mypy)
+        run: mypy app.py
+
+  tests:
+    name: Tests (pytest, Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: app/requirements*.txt
+
+      - name: Install runtime and dev dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Run unit tests (pytest)
+        run: pytest -v
+
+  security-fs:
+    name: Security Scan (Trivy, filesystem)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Scan filesystem for CRITICAL/HIGH vulnerabilities (blocking)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          format: sarif
+          output: trivy-fs-results.sarif
+          exit-code: "1"
+
+      - name: Upload filesystem scan report to GitHub Security tab
+        if: always() && github.event_name == 'push'
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-fs-results.sarif
+          category: fs-scan
+
+  image:
+    name: Build, Scan and Push Docker Image (GHCR)
+    runs-on: ubuntu-latest
+    needs: [secret-scan, quality, tests, security-fs]
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Normalize image name to lowercase (GHCR requirement)
+        run: echo "IMAGE=${REGISTRY}/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR (GITHUB_TOKEN)
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build image (multi-stage, loaded locally for scanning)
+        uses: docker/build-push-action@v6
+        with:
+          context: ./app
+          file: ./app/Dockerfile
+          load: true
+          tags: ${{ env.IMAGE }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Scan image for CRITICAL/HIGH CVEs (blocking)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.IMAGE }}:${{ github.sha }}
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          format: sarif
+          output: trivy-image-results.sarif
+          exit-code: "1"
+
+      - name: Upload image scan report to GitHub Security tab
+        if: always() && github.event_name == 'push'
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-image-results.sarif
+          category: image-scan
+
+      - name: "Push image to GHCR (tags: latest + git sha)"
+        if: github.event_name == 'push'
+        uses: docker/build-push-action@v6
+        with:
+          context: ./app
+          file: ./app/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:${{ github.sha }}
+          cache-from: type=gha
+
+  # ===================================================================
+  # ОПЦИОНАЛЬНО: деплой на свой VPS по SSH.
+  #
+  # Чтобы включить:
+  # 1. Добавь GitHub Secrets: SSH_HOST, SSH_USER, SSH_PRIVATE_KEY,
+  #    DEPLOY_DIR (путь к папке с docker-compose.yml на VPS).
+  # 2. Раскомментируй job ниже.
+  # 3. В docker-compose.yml на VPS укажи образ: ghcr.io/<user>/<repo>:latest
+  # 4. На VPS один раз сделай docker login ghcr.io (нужен PAT с
+  #    read:packages от твоего пользователя GitHub).
+  # ===================================================================
+  # deploy:
+  #   name: Deploy to VPS (SSH)
+  #   runs-on: ubuntu-latest
+  #   if: github.event_name == 'push'
+  #   needs: [image]
+  #   steps:
+  #     - name: Restart app on VPS over SSH
+  #       uses: appleboy/ssh-action@v1.2.0
+  #       with:
+  #         host: ${{ secrets.SSH_HOST }}
+  #         username: ${{ secrets.SSH_USER }}
+  #         key: ${{ secrets.SSH_PRIVATE_KEY }}
+  #         script: |
+  #           cd ${{ secrets.DEPLOY_DIR }}
+  #           docker compose pull app
+  #           docker compose up -d app
